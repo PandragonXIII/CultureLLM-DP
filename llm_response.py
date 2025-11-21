@@ -3,10 +3,15 @@ from sklearn.metrics import f1_score, accuracy_score
 import fire, time, random
 import pathlib
 import textwrap
+import transformers
 
-def getResponse(prompt, model_text, country, context, llama_model=None, llama_tokenizer=None):
+def getResponse(prompt, model_text, country, context, llama_model:transformers.PreTrainedModel=None, llama_tokenizer:transformers.AutoTokenizer=None):
     def llama_prompt(prompt):
         return f"<s>[INST] <<SYS>>\nYou are an {country} chatbot that know {country} very well.\n<</SYS>>\n\n{prompt} [/INST]"
+    
+    def llama3_prompt(prompt):
+        return f"<|begin_of_text|>\n<|start_header_id|>system<|end_header_id|>\nYou are an {country} chatbot that know {country} very well.<|eot_id|><|start_header_id|>user<|end_header_id|>{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>"
+
     if 'llama' in model_text.lower():
         if 'api' in model_text.lower():
             import ssl, json, urllib.request
@@ -62,19 +67,39 @@ def getResponse(prompt, model_text, country, context, llama_model=None, llama_to
                 print("The request failed with status code: " + str(error.code))
                 output = ''
             return output
-        else:
-            prompt = llama_prompt(prompt)
-            input_ids = llama_tokenizer(prompt, return_tensors="pt").input_ids.to("cuda")
-            outputs = llama_model.generate(input_ids, max_new_tokens=200, temperature=0.7, do_sample=True)
+        elif llama_model and llama_tokenizer:
+            # prompt = llama3_prompt(prompt)
+            # input_ids = llama_tokenizer(prompt, return_tensors="pt").input_ids.to("cuda")
+            # outputs = llama_model.generate(input_ids, max_new_tokens=200, temperature=0.7, do_sample=True)
             
-            out_text = llama_tokenizer.decode(outputs[0])
-            out_text = out_text.replace('<pad>', '')
-            out_text = out_text.replace('</s>', '')
-            out_text = out_text.replace('<s>', '')
-            out_text = out_text[len(prompt):]
-            out_text = out_text.strip()
+            # out_text = llama_tokenizer.decode(outputs[0],skip_special_tokens=True)
+            # out_text = out_text.replace('<pad>', '')
+            # out_text = out_text.replace('</s>', '')
+            # out_text = out_text.replace('<s>', '')
+            # out_text = out_text[len(prompt):]
+            # out_text = out_text.strip()
+            # return out_text
+            ###################
+            # New response function #
+            #########################
 
-            return out_text
+            pipe = transformers.pipeline(
+                "text-generation",
+                model=llama_model,
+                tokenizer=llama_tokenizer,
+                device_map="auto",
+            )
+            messages = [
+                {"role": "system", "content": f"You are an {country} chatbot that know {country} very well."},
+                {"role": "user", "content": prompt},
+            ]
+            outputs = pipe(
+                messages,
+                max_new_tokens=200,
+            )
+            return outputs[0]["generated_text"][-1]['content']
+        else:
+            pass
     elif 'gemini' in model_text.lower():
         import google.generativeai as genai
         import urllib.request

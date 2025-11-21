@@ -42,3 +42,56 @@ Local training with DP-SGD using Opacus (dp-Huggingface).先尝试在训练llama
 
 
 ### Problems
+
+
+# Experiment
+Try run 
+```shell
+python llama_finetune.py --base_model "/home/qxy/models/Llama-3.2-1B-Instruct" --new_model "models/Germany/Llama-3.2-3B-Instruct-Germany" --data_files "./data/Germany/Finetune/WVQ_Germany_llama.jsonl"
+```
+
+then implement dp version
+
+```shell
+python llama_finetune.py --base_model "/home/qxy/models/Llama-3.2-1B-Instruct" --new_model "models/Germany/Llama-3.2-3B-Instruct-Germany-dp" --data_files "./data/Germany/Finetune/WVQ_Germany_llama.jsonl" --dp True
+```
+
+reinstall env:
+1. `conda create -n dpsgd python=3.10`'
+2. `python -m pip install torch torchvision`
+3. `python -m pip install jsonlines fire scikit-learn  transformers bitsandbytes `
+4. `python -m pip install datasets`
+5. `pip install peft trl `
+6. `pip install .` (dp-transformers)
+7. `pip install tensorboardX`
+
+
+
+### DUBUG
+#### savemodel 
+> RuntimeError: [enforce fail at inline_container.cc:664] . unexpected pos 2862770624 vs 2862770512
+疑似硬盘空间不足导致
+
+#### savemodel 2
+>RuntimeError: 
+>            Some tensors share memory, this will lead to duplicate memory on disk and potential differences when loading them again: [{'_module.model.embed_tokens.weight', '_module.lm_head.weight'}].
+warrped model 使用trainer.save_model()有问题。查看其代码后发现其使用的也是model.save_pretrained()，所以获得warpper内部的原始LLama模型后，直接使用下面代码保存模型和tokenizer：
+```python
+    trainer.model_wrapped.model.save_pretrained(new_model, safe_serialization=True)
+    trainer.data_collator.tokenizer.save_pretrained(new_model, safe_serialization=True)
+```
+not work:
+```python
+model_to_save = trainer.model.module if hasattr(trainer.model, "module") else trainer.model
+model_to_save.save_pretrained(new_model_dir, safe_serialization=True)   # safe_serialization optional
+tokenizer.save_pretrained(new_model_dir)
+```
+#### training OpacusDPTrainer arg
+>TypeError: OpacusDPTrainer.training_step() takes 3 positional arguments but 4 were given
+modify function `training_step` in dp-transformers pkg.
+
+#### eval
+> LoadFromFile
+>    return _sentencepiece.SentencePieceProcessor_LoadFromFile(self, arg)
+> TypeError: not a string
+tokenizer load error, change to AutoTokenizer works.

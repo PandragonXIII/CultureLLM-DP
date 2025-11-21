@@ -5,6 +5,8 @@ import pathlib
 import textwrap
 from llm_response import getResponse
 
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
 context_dict = dict()
 with open("data/culture_context.jsonl", "r+", encoding="utf8") as f:
     for item in jsonlines.Reader(f):
@@ -39,7 +41,7 @@ def getModel(language):
         model_dict = {'germany': 'xxx',
                       'germany_L': 'xxx',
                       'chatgpt': 'gpt-3.5-turbo',
-                    'llama_Germany': 'xxx',
+                    'llama_Germany': 'models/Germany/Llama-3.2-3B-Instruct-Germany',
                     'llama': 'xxx',
                     'germany_50': 'xxx',
                     'germany_100': 'xxx',
@@ -426,6 +428,8 @@ def run(language, model_text, task, context, close=False):
 
     if model_text == 'cultureLLM':
         model = 'xxx'
+    elif model_text == 'llama3':
+        model = '/home/qxy/models/Llama-3.2-3B-Instruct'
     else:
         model_dict = getModel(language)
 
@@ -454,16 +458,16 @@ def run(language, model_text, task, context, close=False):
         base_model = 'xxx'
         max_memory = {i: '46000MB' for i in range(torch.cuda.device_count())}
         llama_model = LlamaForCausalLM.from_pretrained(
-            base_model,
+            model,
             quantization_config=quant_config,
-            # device_map={"": 0}
+            # device_map={"": 0}\
             device_map="auto",
             max_memory=max_memory
         )
-        llama_model.quantization_config = quant_config
-        llama_model.config.use_cache = False
+        # llama_model.quantization_config = quant_config
+        # llama_model.config.use_cache = False
 
-        tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "right"
 
