@@ -35,8 +35,9 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 base_model = ''
 
 def run(base_model, new_model, data_files, dp=False):
-    dataset = load_dataset('json', data_files=data_files, split='train[:10]')
-
+    dataset = load_dataset('json', data_files=data_files, split='train')
+    country = data_files.split('/')[-3]
+    print(country)
     # compute_dtype = getattr(torch, "float16")
 
     # quant_config = BitsAndBytesConfig(
@@ -105,16 +106,11 @@ def run(base_model, new_model, data_files, dp=False):
     else:
         data_collator = dp_transformers.DataCollatorForPrivateCausalLanguageModeling(tokenizer)
 
-        # dataset = prepare_dataset_dp(dataset,tokenizer,2048)
-        print(dataset)
-        print(dataset["text"][0])
-        dataset = dataset.map(preprocess_batch, 
-                              fn_kwargs={"tokenizer":tokenizer,"max_length":2048
-                                },batched=True, remove_columns=["text"])
-        dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
-        print(dataset.features,end="\n\n")
+        # Prepare Training Dataset
+        # print(dataset)
+        # print(dataset["text"][0])
+        dataset = data_preprocess(dataset,tokenizer,2048,"Germany")
         print(model.dtype,end="\n\n")
-        # dataset.
 
         privacy_args = dp_transformers.PrivacyArguments(
             per_sample_max_grad_norm=1.0,
@@ -138,7 +134,7 @@ def run(base_model, new_model, data_files, dp=False):
     # trainer.save_model(new_model)
     print("Model save done.")
 
-def eval(model="models/Germany/Llama-3.2-3B-Instruct-Germany"):
+def eval(model="models/Germany/Llama-3.2-1B-Instruct-Germany-dp"):
     prompt = "Who is Leonardo Da Vinci?"
     tokenizer = AutoTokenizer.from_pretrained(model)
     model = LlamaForCausalLM.from_pretrained(model, device_map="auto")
@@ -146,6 +142,36 @@ def eval(model="models/Germany/Llama-3.2-3B-Instruct-Germany"):
     result = pipe(f"<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n### Question: {prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>")
     
     print(result[0]['generated_text'])
+
+def data_preprocess(dataset,tokenizer,max_length,country):
+    """
+    split "text" field into "question" and "answer" parts,
+    apply chat template,
+    tokenize with tokenizer,
+    """
+    llama_chat_template = "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are an {country} chatbot that know {country} very well.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{query}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n### Answer:{answer}<|eom_id|><|eot_id|><|end_of_text|>"
+    # split "text" field into "question" and "answer" parts and apply template
+    def split_qa(example):
+        text = example["text"]
+        question, answer = text.split("### Answer:", 1)
+        q_col = question.strip()
+        a_col = answer.strip()
+        example["text"] = llama_chat_template.format(country=country, query=q_col, answer=a_col)
+        # tokenize
+        outputs = tokenizer(
+            example["text"],
+            truncation=True,
+            max_length=max_length,
+            padding=True,
+            return_attention_mask=True,
+        )
+        example["input_ids"] = outputs["input_ids"]
+        example["attention_mask"] = outputs["attention_mask"]
+        return example
+    dataset = dataset.map(split_qa,remove_columns=["text"])
+    # print(dataset["text"][0])
+    dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+    return dataset
 
 def prepare_dataset_dp(dataset,processing_class,max_length):
     # dataset = dataset.with_transform(remove_none_values)
@@ -177,7 +203,7 @@ def prepare_dataset_dp(dataset,processing_class,max_length):
 def preprocess_batch(dataset,tokenizer,max_length):
         # apple chat template
         # separate dataset into "question" and "answer" parts
-        
+
         outputs = tokenizer(
             dataset["text"],
             truncation=True,
@@ -189,7 +215,7 @@ def preprocess_batch(dataset,tokenizer,max_length):
 
 if __name__ == '__main__':
     fire.Fire(run)
-    # eval()
+    eval()
 
 
 

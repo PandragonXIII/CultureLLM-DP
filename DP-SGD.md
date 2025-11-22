@@ -95,3 +95,13 @@ modify function `training_step` in dp-transformers pkg.
 >    return _sentencepiece.SentencePieceProcessor_LoadFromFile(self, arg)
 > TypeError: not a string
 tokenizer load error, change to AutoTokenizer works.
+
+#### device/map error
+>ValueError: No activations detected for <class 'torch.nn.modules.linear.Linear'>, run forward after add_hooks(model)
+On deleteing `os.environ["CUDA_VISIBLE_DEVICES"] = "0"`, the error occurs.
+
+## dp_pipeline.py
+Load data, train, test on specific language and model w/wo DP
+```shell
+python dp_pipeline.py --country Germany --cuda "cuda:0" --dp
+```
