@@ -3,10 +3,7 @@ choose multiple languages
 split train-test datasets
 train model under DP
 evaluate on testset & compare with base model
-TODO:
-[ ] train different size model 1b/3b and compare
-[ ] train non-dp version and compare
-[ ] train base model with full data (culturellm-all)
+
 """
 import os
 import torch
@@ -18,9 +15,11 @@ import dp_transformers
 import argparse
 from sklearn.metrics import f1_score
 import json
+import numpy as np
 
 
 Languages = ["Arabic", "English", "Korean", "Turkey","Bengali", "China", "Germany","Portugal", "Greece", "Spanish"] #High, middle, low resource languages
+GENERATE_MAX_TOKENS = 5
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Finetune Llama Model on a Specific Language")
@@ -33,7 +32,10 @@ def parse_args():
 def main():
     args = parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda
-    datapath = f"data/{args.country}/Finetune/WVQ_{args.country}_1000.jsonl"
+    if args.country == 'Arabic':
+        datapath = f"data/Arabic/Finetune/WVQ_arabic_Iraq_Jordan_llama.jsonl"
+    else:
+        datapath = f"data/{args.country}/Finetune/WVQ_{args.country}_llama.jsonl"
     dataset = load_dataset('json', data_files=datapath, split='train')
     # check dataset sizes
     print(f"{args.country} dataset size: {dataset.num_rows}")
@@ -54,51 +56,8 @@ def main():
     )
 
     ##### eval on testset & compare with base model #####
-    eval(md_pth,"cuda:0",splited['test'])
-    
-def eval(model_path,cuda_device,testset):
-    # load finetuned model
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    model = LlamaForCausalLM.from_pretrained(model_path, device_map=cuda_device)
-    pipe = pipeline(
-        "text-generation",
-        model=model,
-        tokenizer=tokenizer,
-        device_map="auto",
-    )
-    for i in range(2):
-        messages = testset[i]['messages']
-        # print(f"message:{messages}")
-        # remove "assistant" part to evaluate
-        messages = [msg for msg in messages if msg["role"] != "assistant"]
-        print(f"Input messages:{messages}")
-        outputs = pipe(
-            messages,
-            max_new_tokens=100,
-        )
-        print(f"Response: {outputs[0]['generated_text'][-1]['content']}\n")
-    
-    ##### compute f1 matrix on full testset #####
-    # generate responses
-    y_true = []
-    y_pred = []
-    for i in range(len(testset)):
-        messages = testset[i]['messages']
-        # get true answer
-        for msg in messages:
-            if msg["role"] == "assistant":
-                y_true.append(msg["content"]) # single number "x"
-        # remove "assistant" part to evaluate
-        messages = [msg for msg in messages if msg["role"] != "assistant"]
-        outputs = pipe(
-            messages,
-            max_new_tokens=50,
-        )
-        ans = post_process(outputs[0]['generated_text'][-1]['content'],ground_truth=y_true[-1])
-        y_pred.append(ans)
-    # compute f1 score
-    f1 = f1_score(y_true, y_pred, average='weighted')
-    print(f"F1 score on testset: {f1}")
+    weighted_f1 = eval(md_pth,"cuda:0",splited['test'])[-1]
+    avg_distance = eval(md_pth,"cuda:0",splited['test'],metric="distance")
     # save to file
     if not os.path.exists("results/score.json"):
         with open("results/score.json", 'w') as fw:
@@ -107,11 +66,88 @@ def eval(model_path,cuda_device,testset):
     else:
         with open(f"results/score.json", 'r') as fr:
             read_scores = json.load(fr)
-    if model_path not in read_scores.keys():
-        read_scores[model_path] = {}
-    read_scores[model_path]['f1_score'] = f1
+    if md_pth not in read_scores.keys():
+        read_scores[md_pth] = {}
+    if args.country not in read_scores[md_pth].keys():
+        read_scores[md_pth][args.country] = {}
+    read_scores[md_pth][args.country]['weighted_f1'] = weighted_f1
+    read_scores[md_pth][args.country]['avg_distance'] = avg_distance
     with open(f"results/score.json", 'w') as fw:
         json.dump(read_scores, fw, indent=4)
+
+    
+def eval(model_path,cuda_device,testset,metric='f1'):
+    # load finetuned model
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    tokenizer.pad_token = tokenizer.eos_token # Basemodel may not have pad_token
+    model = LlamaForCausalLM.from_pretrained(model_path, device_map=cuda_device)
+    pipe = pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        device_map="auto",
+    )
+    # get labels
+    y_true = []
+    y_pred = []
+    for i in range(len(testset)):
+        messages = testset[i]['text']
+        # get true answer
+        y_true.append(messages.split("### Answer:")[-1].strip())
+
+    # preprocess testset
+    testset = data_preprocess(testset,tokenizer,2048,eval_flag=True)
+    # generate some samples
+    print("Generating some sample responses:")
+    for i in range(2):
+        messages = testset[i]['text']
+        # print(f"message:{messages}")
+        # remove "assistant" part to evaluate
+        # messages = "<|begin_of_text|>"+messages.split("### Answer:")[0].strip()+"### Answer:"
+        print(f"Input messages:{messages}")
+        outputs = pipe(
+            messages,
+            max_new_tokens=5,
+            return_full_text=False
+        )
+        print(f"Response: {outputs[0]['generated_text']}\n")
+    
+    ##### compute f1 matrix on full testset #####
+    # generate predictions with pipeline
+    outputs = pipe(
+        list(testset['text']),
+        max_new_tokens=GENERATE_MAX_TOKENS,
+        return_full_text=False
+    )
+    # post-process outputs to get predicted answers
+    for i,output in enumerate(outputs):
+        ans = post_process(output[0]['generated_text'],ground_truth=y_true[i])
+        y_pred.append(ans)
+    if metric == 'f1':
+        # compute f1 score
+        microf1 = f1_score(y_true, y_pred, average='micro')
+        print(f"micro F1 score on testset: {microf1}")
+        macrof1 = f1_score(y_true, y_pred, average='macro')
+        print(f"macro F1 score on testset: {macrof1}")
+        weightedf1 = f1_score(y_true, y_pred, average='weighted')
+        print(f"weighted F1 score on testset: {weightedf1}")
+        
+        return (microf1,macrof1,weightedf1)
+    elif metric == "distance":
+        # clean data to float, ignore non-numeric answers
+        num_y_true = []
+        num_y_pred = []
+        for y_t, y_p in zip(y_true[:], y_pred[:]):
+            try:
+                num_y_true.append(float(y_t))
+                num_y_pred.append(float(y_p))
+            except:
+                continue
+            
+        # compute average distance
+        dist = np.mean([abs(y_t - y_p) for y_t,y_p in zip(num_y_true,num_y_pred)])
+        print(f"Average distance on testset: {dist}")
+        return dist
 
 
 def finetune_language_model(base_model,new_model,dataset:Dataset,country,dp=False,device='cuda:0'):
@@ -128,7 +164,7 @@ def finetune_language_model(base_model,new_model,dataset:Dataset,country,dp=Fals
 
     training_params = TrainingArguments(
         output_dir=f"./cache/results-finetune/{new_model}",
-        num_train_epochs=3,
+        num_train_epochs=2,
         per_device_train_batch_size=2,
         gradient_accumulation_steps=4,
         optim="paged_adamw_32bit",
@@ -164,7 +200,10 @@ def finetune_language_model(base_model,new_model,dataset:Dataset,country,dp=Fals
         # Prepare Training Dataset
         # print(dataset)
         # print(dataset["text"][0])
-        dataset = data_preprocess(dataset,tokenizer,2048,"Germany")
+        dataset = data_preprocess(dataset,tokenizer,2048,country)
+        dataset = dataset.remove_columns("text")
+        print("After preprocess:")
+        print(dataset)
         print(model.dtype,end="\n\n")
 
         privacy_args = dp_transformers.PrivacyArguments(
@@ -184,41 +223,44 @@ def finetune_language_model(base_model,new_model,dataset:Dataset,country,dp=Fals
 
     trainer.train()
 
-    trainer.model_wrapped.model.save_pretrained(new_model, safe_serialization=True)
-    trainer.data_collator.tokenizer.save_pretrained(new_model, safe_serialization=True)
-    # trainer.save_model(new_model)
+    if dp:
+        trainer.model_wrapped.model.save_pretrained(new_model, safe_serialization=True)
+        trainer.data_collator.tokenizer.save_pretrained(new_model, safe_serialization=True)
+    else:
+        trainer.save_model(new_model)
     print("Model save done.")
     return new_model
 
-def data_preprocess(dataset,tokenizer,max_length,country):
+def data_preprocess(dataset,tokenizer,max_length,country=None,eval_flag=False):
     """
-    Load dataset with OpenAI chat format, convert to Llama and tokenize
-    split "text" field into "question" and "answer" parts,
-    apply chat template,
+    Load dataset with "text" col, convert to Llama training format and tokenize
+    split "text" field into "question" and "answer" parts and apply chat template,
     tokenize with tokenizer,
     params:
-    dataset: {"messages": [{"role": "system", "content": "xxx"}, {"role": "user", "content": "xxx"}, {"role": "assistant", "content": "x"}]}
+    dataset (llama format): {"text": "### Question: xxx \n ### Answer: x"}
     """
+    llama_base_template = "<|begin_of_text|>{query} Answer Only by number; No Explanation \n{answer}<|end_of_text|>"
     llama_chat_template = "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{sysprompt}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{query}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{answer}<|eom_id|><|eot_id|><|end_of_text|>"
-    # split "text" field into "question" and "answer" parts and apply template
-    # def split_qa(example):
-    #     text = example["text"]
-    #     question, answer = text.split("### Answer:", 1)
-    #     q_col = question.strip()
-    #     a_col = answer.strip()
-    #     example["text"] = llama_chat_template.format(country=country, query=q_col, answer=a_col)
-    #     # tokenize
-    #     outputs = tokenizer(
-    #         example["text"],
-    #         truncation=True,
-    #         max_length=max_length,
-    #         padding=True,
-    #         return_attention_mask=True,
-    #     )
-    #     example["input_ids"] = outputs["input_ids"]
-    #     example["attention_mask"] = outputs["attention_mask"]
-    #     return example
-    def apply_template_tokenize(example):
+    def apply_base_template_tokenize(example,eval_flag):
+        prompt = example["text"]
+        query = prompt.split("### Answer:")[0].strip()
+        answer = "### Answer: " + prompt.split("### Answer:")[-1].strip()
+        example["text"] = llama_base_template.format(query=query, answer=answer)
+        if eval_flag:
+            # remove answer part and end token for evaluation
+            example["text"] = example["text"].split("### Answer:")[0] + "### Answer:"
+        # tokenize
+        outputs = tokenizer(
+            example["text"],
+            truncation=True,
+            max_length=max_length,
+            padding=True,
+            return_attention_mask=True,
+        )
+        example["input_ids"] = outputs["input_ids"]
+        example["attention_mask"] = outputs["attention_mask"]
+        return example
+    def apply_chat_template_tokenize(example):
         messages = example["messages"]
         sys_prompt = ""
         user_prompt = ""
@@ -246,9 +288,10 @@ def data_preprocess(dataset,tokenizer,max_length,country):
         example["input_ids"] = outputs["input_ids"]
         example["attention_mask"] = outputs["attention_mask"]
         return example
-    dataset = dataset.map(apply_template_tokenize) # ,remove_columns=["text"]
+    dataset = dataset.map(apply_base_template_tokenize,
+                          fn_kwargs={"eval_flag": eval_flag}) # ,remove_columns=["text"]
     print(dataset["text"][0])
-    dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+    dataset.set_format(type="torch", columns=["text", "input_ids", "attention_mask"])
     return dataset
 
 def post_process(output,ground_truth=None):

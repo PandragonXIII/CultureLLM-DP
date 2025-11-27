@@ -1,6 +1,6 @@
 # Comparing General Model & Culture-specific Model under DP-SGD
 With a bunch of data, we want to examine whether training a general model or culture-specific models yields better performance under differential privacy constraints using DP-SGD.
-Use main method raised in [CultureLLM: Incorporating Cultural Differences into Large Language Models](https://proceedings.neurips.cc/paper_files/paper/2024/file/9a16935bf54c4af233e25d998b7f4a2c-Paper-Conference.pdf) 
+Use main method proposed in [CultureLLM: Incorporating Cultural Differences into Large Language Models](https://proceedings.neurips.cc/paper_files/paper/2024/file/9a16935bf54c4af233e25d998b7f4a2c-Paper-Conference.pdf) 
 
 
 ## Dataset
@@ -103,5 +103,13 @@ On deleteing `os.environ["CUDA_VISIBLE_DEVICES"] = "0"`, the error occurs.
 ## dp_pipeline.py
 Load data, train, test on specific language and model w/wo DP
 ```shell
-python dp_pipeline.py --country Germany --cuda "cuda:0" --dp
+python dp_pipeline.py --country Germany --cuda 0 --dp
 ```
+
+### TODO
+[ ] evaluate original model and compare.
+[ ] train different size model 1b/3b and compare
+    [ ] Allow quantize fine-tuning. (3b model OOM)
+[ ] train non-dp version and compare
+[ ] train base model with full data (culturellm-all)
+[ ] histo gram
